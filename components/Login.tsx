@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import TrophyIcon from './icons/TrophyIcon';
 import { User, SignUpData } from '../types';
@@ -90,6 +91,11 @@ const Login: React.FC<LoginProps> = ({ onLogin, onSignUp, users }) => {
             <button onClick={() => setIsSigningUp(!isSigningUp)} className="text-sm text-brand-primary hover:underline">
                 {isSigningUp ? "Already have an account? Sign in" : "Don't have an account? Sign up"}
             </button>
+        </div>
+        <div className="text-center text-xs text-brand-text-secondary pt-4 border-t border-gray-700">
+            <p>For easy access, you can sign in with:</p>
+            <p>Email: <strong className="text-brand-text">admin@leaguelink.com</strong></p>
+            <p>Password: <strong className="text-brand-text">leaguelink</strong></p>
         </div>
       </div>
     </div>
