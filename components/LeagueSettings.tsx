@@ -8,31 +8,36 @@ import TrophyIcon from './icons/TrophyIcon';
 interface LeagueSettingsProps {
     league: League;
     onRolloverLeague: (sourceLeagueId: string, newLeagueName: string, keepTeams: boolean) => void;
+    onUpdateLeague: (updatedLeague: League) => void;
+    onDeleteLeague: (leagueId: string) => void;
     players: Player[];
     teams: Team[];
     matches: Match[];
     brackets: TournamentBracket[];
 }
 
-const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeague, players, teams, matches, brackets }) => {
+const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeague, onUpdateLeague, onDeleteLeague, players, teams, matches, brackets }) => {
     const [leagueName, setLeagueName] = useState(league.name);
-    const [winScore, setWinScore] = useState(league.winScore.toString());
-    const [playersPerTeam, setPlayersPerTeam] = useState<number>(league.playersPerTeam);
-    const [pointsPerRinger, setPointsPerRinger] = useState(league.pointsPerRinger.toString());
+    const [winScore, setWinScore] = useState(league.winScore);
+    const [playersPerTeam, setPlayersPerTeam] = useState(league.playersPerTeam);
+    const [pointsPerRinger, setPointsPerRinger] = useState(league.pointsPerRinger);
 
     const [isRolloverModalOpen, setIsRolloverModalOpen] = useState(false);
     const [newLeagueName, setNewLeagueName] = useState(`${league.name} ${new Date().getFullYear() + 1}`);
     const [keepTeams, setKeepTeams] = useState(true);
 
     const handleSave = () => {
-        // In a real app, this would call a function from props to update state in App.tsx
-        alert('Settings saved! (This is a mock-up, functionality is not fully implemented)');
+        onUpdateLeague({
+            ...league,
+            name: leagueName,
+            winScore: Number(winScore),
+            playersPerTeam: Number(playersPerTeam),
+            pointsPerRinger: Number(pointsPerRinger),
+        });
     };
 
     const handleDelete = () => {
-         if (window.confirm('Are you sure you want to delete this league? This action cannot be undone.')) {
-            alert('League deleted! (This is a mock-up, functionality is not fully implemented)');
-         }
+        onDeleteLeague(league.id);
     }
 
     const handleCopyId = () => {
@@ -61,22 +66,17 @@ const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeagu
 
     const handleDownloadReport = () => {
         // --- DATA AGGREGATION ---
-        // 1. Champions
         const champions = brackets.map(bracket => {
             let winnerName = 'N/A';
             const participantsMap = new Map(bracket.participants.map(p => [p.id, p.name]));
             if (bracket.type === 'round-robin') {
                 const standings: Record<string, number> = {};
                 bracket.participants.forEach(p => { standings[p.id] = 0; });
-                // FIX: The type of `m.winnerId` is `string | null`. A `typeof` check is needed
-                // to safely use it as an index for the `standings` object.
                 bracket.matches?.forEach(m => { if (typeof m.winnerId === 'string') standings[m.winnerId]++; });
                 const winnerId = Object.entries(standings).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0];
                 if (winnerId) winnerName = participantsMap.get(winnerId) || 'Unknown';
             } else {
                 const finalMatch = bracket.rounds?.[bracket.rounds.length - 1]?.[0];
-                // FIX: The type of `finalMatch.winnerId` is `string | null`. A `typeof` check is needed
-                // to safely pass it to `participantsMap.get`, which expects a `string`.
                 if (finalMatch?.winnerId && typeof finalMatch.winnerId === 'string') {
                     winnerName = participantsMap.get(finalMatch.winnerId) || 'Unknown';
                 }
@@ -84,7 +84,6 @@ const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeagu
             return { name: bracket.name, winner: winnerName };
         }).filter(c => c.winner !== 'N/A');
 
-        // 2. Final Standings
         const standingsData = (() => {
             const stats: Record<string, Omit<TeamStanding, 'teamName' | 'players'>> = {};
             teams.forEach(team => { stats[team.id] = { teamId: team.id, wins: 0, losses: 0, gamesPlayed: 0, pointsFor: 0, pointsAgainst: 0, pointDifferential: 0 }; });
@@ -101,7 +100,6 @@ const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeagu
             return Object.values(stats).map(ts => ({ ...ts, teamName: teams.find(t => t.id === ts.teamId)?.name || '?' })).sort((a, b) => b.wins - a.wins || b.pointDifferential - a.pointDifferential);
         })();
 
-        // 3. Player Leaderboard
         const playerStats = (() => {
             const stats: Record<string, { ringers: number, gamesPlayed: number, totalShoesPitched: number }> = {};
             players.forEach(p => { stats[p.id] = { ringers: 0, gamesPlayed: 0, totalShoesPitched: 0 }; });
@@ -109,7 +107,6 @@ const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeagu
                 const playerIdsInMatch = [...match.teamA.players, ...match.teamB.players].map(p => p.id);
                 Object.entries(match.playerStats).forEach(([playerId, pStats]) => {
                     if (stats[playerId]) {
-                        // Cast pStats to PlayerStatsData to access its properties safely, as its type is inferred as 'unknown'.
                         const pStatsData = pStats as PlayerStatsData;
                         stats[playerId].ringers += pStatsData.ringers;
                         stats[playerId].totalShoesPitched += pStatsData.totalShoesPitched;
@@ -120,10 +117,8 @@ const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeagu
             return Object.entries(stats).map(([playerId, stat]) => ({ ...stat, playerId, name: players.find(p => p.id === playerId)?.name || '?', ringerPercentage: stat.totalShoesPitched > 0 ? (stat.ringers / stat.totalShoesPitched) * 100 : 0, })).sort((a, b) => b.ringers - a.ringers);
         })();
         
-        // 4. Match History
         const sortedMatches = [...matches].sort((a, b) => a.timestamp - b.timestamp);
         
-        // --- HTML & PDF GENERATION ---
         let htmlContent = `
             <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Season Report: ${league.name}</title>
             <style>
@@ -197,7 +192,7 @@ const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeagu
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-brand-text-secondary mb-1">Score to Win</label>
-                        <input type="number" value={winScore} onChange={e => setWinScore(e.target.value)} className="w-full bg-brand-bg border border-gray-600 rounded-lg px-4 py-2 text-brand-text focus:outline-none focus:ring-2 focus:ring-brand-primary" min="1" />
+                        <input type="number" value={winScore} onChange={e => setWinScore(parseInt(e.target.value, 10) || 1)} className="w-full bg-brand-bg border border-gray-600 rounded-lg px-4 py-2 text-brand-text focus:outline-none focus:ring-2 focus:ring-brand-primary" min="1" />
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-brand-text-secondary mb-1">Players Per Team (for a match)</label>
@@ -205,7 +200,7 @@ const LeagueSettings: React.FC<LeagueSettingsProps> = ({ league, onRolloverLeagu
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-brand-text-secondary mb-1">Points Per Ringer (after cancelling)</label>
-                        <input type="number" value={pointsPerRinger} onChange={e => setPointsPerRinger(e.target.value)} className="w-full bg-brand-bg border border-gray-600 rounded-lg px-4 py-2 text-brand-text focus:outline-none focus:ring-2 focus:ring-brand-primary" min="0" />
+                        <input type="number" value={pointsPerRinger} onChange={e => setPointsPerRinger(parseInt(e.target.value, 10) || 0)} className="w-full bg-brand-bg border border-gray-600 rounded-lg px-4 py-2 text-brand-text focus:outline-none focus:ring-2 focus:ring-brand-primary" min="0" />
                     </div>
 
                     <div className="pt-4 border-t border-gray-700">

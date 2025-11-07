@@ -1,77 +1,43 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import useLocalStorage from './hooks/useLocalStorage';
 import { User, League, Player, Team, SignUpData } from './types';
 import Dashboard from './components/Dashboard';
 import CreateLeague from './components/CreateLeague';
 import Header from './components/Header';
 import Login from './components/Login';
 import { requestNotificationPermission } from './utils/notifications';
-
-// Default "public" leagues to ensure the "Join League" feature is functional for all users.
-// These are seeded into localStorage if the user has no existing leagues.
-const defaultLeagues: League[] = [
-  {
-    id: 'league-public-1',
-    name: 'Downtown Horseshoe Club',
-    winScore: 21,
-    playersPerTeam: 2,
-    pointsPerRinger: 3,
-    ownerId: 'user_system_001', // A system user, so it's not owned by the current user
-  },
-  {
-    id: 'league-public-2',
-    name: 'Backyard Champions Tour',
-    winScore: 15,
-    playersPerTeam: 1,
-    pointsPerRinger: 3,
-    ownerId: 'user_system_002',
-  },
-];
-
+import { db } from './services/database';
 
 const App: React.FC = () => {
-    const [users, setUsers] = useLocalStorage<User[]>('users', []);
-    const [currentUser, setCurrentUser] = useLocalStorage<User | null>('currentUser', null);
-    const [leagues, setLeagues] = useLocalStorage<League[]>('leagues', []);
-    const [activeLeagueId, setActiveLeagueId] = useLocalStorage<string | null>('activeLeagueId', null);
-    
-    // The key for joined leagues is now dynamic based on the logged-in user.
-    const joinedLeaguesKey = `joined_leagues_${currentUser?.id || 'guest'}`;
-    const [joinedLeagueIds, setJoinedLeagueIds] = useLocalStorage<string[]>(joinedLeaguesKey, []);
+    const [users, setUsers] = useState(() => db.getUsers());
+    const [currentUser, setCurrentUser] = useState(() => db.getCurrentUser());
+    const [leagues, setLeagues] = useState(() => db.getLeagues());
+    const [activeLeagueId, setActiveLeagueId] = useState(() => db.getActiveLeagueId());
+    const [joinedLeagueIds, setJoinedLeagueIds] = useState<string[]>([]);
 
+    // Persist state changes back to the database (localStorage)
+    useEffect(() => { db.saveUsers(users); }, [users]);
+    useEffect(() => { db.saveCurrentUser(currentUser); }, [currentUser]);
+    useEffect(() => { db.saveLeagues(leagues); }, [leagues]);
+    useEffect(() => { db.saveActiveLeagueId(activeLeagueId); }, [activeLeagueId]);
     useEffect(() => {
-        // Request permission for notifications
-        requestNotificationPermission();
-        
-        // Seed with default leagues if localStorage is empty for them.
-        // This ensures new users have public leagues to join.
-        const storedLeagues = localStorage.getItem('leagues');
-        if (!storedLeagues || storedLeagues === '[]') {
-            setLeagues(defaultLeagues);
+        if (currentUser) {
+            db.saveJoinedLeagueIds(currentUser.id, joinedLeagueIds);
         }
-    }, [setLeagues]);
+    }, [currentUser, joinedLeagueIds]);
 
+    // Re-fetch joined leagues when user changes
     useEffect(() => {
-        const adminEmail = 'admin@leaguelink.com';
-        const adminUserExists = users.some(user => user.email === adminEmail);
-
-        if (!adminUserExists) {
-            const adminUser: User = {
-                id: 'user-admin-default',
-                email: adminEmail,
-                password: 'leaguelink',
-            };
-            setUsers(prevUsers => [...prevUsers, adminUser]);
-        }
-    }, [users, setUsers]);
-
-    // When user logs out, clear their specific data
-    useEffect(() => {
-        if (!currentUser) {
+        if (currentUser) {
+            setJoinedLeagueIds(db.getJoinedLeagueIds(currentUser.id));
+        } else {
             setJoinedLeagueIds([]);
         }
-    }, [currentUser, setJoinedLeagueIds]);
+    }, [currentUser]);
+
+    useEffect(() => {
+        requestNotificationPermission();
+    }, []);
 
     const handleCreateLeague = (name: string, winScore: number) => {
         if (!currentUser) return;
@@ -83,14 +49,12 @@ const App: React.FC = () => {
             pointsPerRinger: 3, // default
             ownerId: currentUser.id,
         };
-        const updatedLeagues = [...leagues, newLeague];
-        setLeagues(updatedLeagues);
+        setLeagues(prev => [...prev, newLeague]);
         setActiveLeagueId(newLeague.id);
     };
 
     const handleJoinLeague = (leagueId: string): boolean => {
         if (!currentUser) return false;
-        // Clean the input ID to remove surrounding quotes that might be added on copy-paste.
         const cleanedLeagueId = leagueId.trim().replace(/^"|"$|^'|'$/g, '');
         const leagueToJoin = leagues.find(l => l.id === cleanedLeagueId);
 
@@ -124,60 +88,68 @@ const App: React.FC = () => {
             return;
         }
 
-        // 1. Create new league
-        const newLeague: League = {
-            ...sourceLeague,
-            id: `league-${Date.now()}`,
-            name: newLeagueName,
-        };
-
-        // 2. Read source data from localStorage
-        const sourcePlayers: Player[] = JSON.parse(localStorage.getItem(`players_${sourceLeagueId}`) || '[]');
-        const sourceTeams: Team[] = JSON.parse(localStorage.getItem(`teams_${sourceLeagueId}`) || '[]');
-
+        const newLeague: League = { ...sourceLeague, id: `league-${Date.now()}`, name: newLeagueName };
+        const sourcePlayers = db.getPlayers(sourceLeagueId);
+        const sourceTeams = db.getTeams(sourceLeagueId);
         const newPlayers: Player[] = [];
         const newTeams: Team[] = [];
         const oldToNewTeamIdMap = new Map<string, string>();
 
-        // 3. Process teams if keeping them
         if (keepTeams && sourceTeams.length > 0) {
             sourceTeams.forEach(team => {
                 const newTeamId = `team-${Date.now()}-${Math.random().toString(36).substring(7)}`;
                 oldToNewTeamIdMap.set(team.id, newTeamId);
-                newTeams.push({
-                    ...team,
-                    id: newTeamId,
-                    leagueId: newLeague.id,
-                });
+                newTeams.push({ ...team, id: newTeamId, leagueId: newLeague.id });
             });
         }
 
-        // 4. Process players
         sourcePlayers.forEach(player => {
-            const newPlayerId = `player-${Date.now()}-${Math.random().toString(36).substring(7)}`;
             const newPlayer: Player = {
                 ...player,
-                id: newPlayerId,
+                id: `player-${Date.now()}-${Math.random().toString(36).substring(7)}`,
                 leagueId: newLeague.id,
-                role: undefined, // Reset roles
+                role: undefined,
                 teamId: keepTeams && player.teamId ? oldToNewTeamIdMap.get(player.teamId) || null : null,
             };
             newPlayers.push(newPlayer);
         });
 
-        // 5. Write new data to localStorage for the new league
-        localStorage.setItem(`players_${newLeague.id}`, JSON.stringify(newPlayers));
-        localStorage.setItem(`teams_${newLeague.id}`, JSON.stringify(newTeams));
-        localStorage.setItem(`matches_${newLeague.id}`, '[]');
-        localStorage.setItem(`scheduled_matches_${newLeague.id}`, '[]');
-        localStorage.setItem(`chat_messages_${newLeague.id}`, '[]');
-        localStorage.setItem(`tournaments_${newLeague.id}`, '[]');
+        db.savePlayers(newLeague.id, newPlayers);
+        db.saveTeams(newLeague.id, newTeams);
+        db.saveMatches(newLeague.id, []);
+        db.saveScheduledMatches(newLeague.id, []);
+        db.saveChatMessages(newLeague.id, []);
+        db.saveBrackets(newLeague.id, []);
 
-        // 6. Update app state
         setLeagues(prev => [...prev, newLeague]);
         setActiveLeagueId(newLeague.id);
-
         alert(`Successfully rolled over to new season: "${newLeague.name}"! You are now managing the new league.`);
+    };
+    
+    const handleUpdateLeague = (updatedLeague: League) => {
+        setLeagues(prev => prev.map(l => l.id === updatedLeague.id ? updatedLeague : l));
+        alert('League settings saved!');
+    };
+    
+    const handleDeleteLeague = (leagueId: string) => {
+        if (!window.confirm('Are you sure you want to delete this league? This action is permanent and will delete all associated data.')) return;
+        
+        setLeagues(prev => prev.filter(l => l.id !== leagueId));
+        db.clearLeagueData(leagueId);
+
+        users.forEach(user => {
+            const joined = db.getJoinedLeagueIds(user.id);
+            if (joined.includes(leagueId)) {
+                db.saveJoinedLeagueIds(user.id, joined.filter(id => id !== leagueId));
+            }
+        });
+        
+        setJoinedLeagueIds(prev => prev.filter(id => id !== leagueId));
+
+        if (activeLeagueId === leagueId) {
+            setActiveLeagueId(null);
+        }
+        alert('League successfully deleted.');
     };
 
     const handleSignUp = (data: SignUpData): boolean => {
@@ -186,13 +158,9 @@ const App: React.FC = () => {
             alert("An account with this email already exists.");
             return false;
         }
-        const newUser: User = {
-            id: `user-${Date.now()}`,
-            email: data.email,
-            password: data.password,
-        };
+        const newUser: User = { id: `user-${Date.now()}`, email: data.email, password: data.password };
         setUsers([...users, newUser]);
-        setCurrentUser(newUser); // Auto-login after sign up
+        setCurrentUser(newUser);
         alert("Sign up successful! You are now logged in.");
         return true;
     };
@@ -209,15 +177,11 @@ const App: React.FC = () => {
     const userLeagues = useMemo(() => {
         const owned = leagues.filter(l => l.ownerId === currentUser?.id);
         const joined = leagues.filter(l => joinedLeagueIds.includes(l.id));
-        
-        // Use a map to ensure uniqueness if a user joins their own league somehow
         const allUserLeaguesMap = new Map<string, League>();
         owned.forEach(l => allUserLeaguesMap.set(l.id, l));
         joined.forEach(l => allUserLeaguesMap.set(l.id, l));
-
         return Array.from(allUserLeaguesMap.values());
     }, [leagues, currentUser, joinedLeagueIds]);
-
 
     const activeLeague = userLeagues.find(l => l.id === activeLeagueId);
 
@@ -236,7 +200,14 @@ const App: React.FC = () => {
             />
             <main className="p-4 sm:p-6 lg:p-8">
                 {activeLeague ? (
-                    <Dashboard key={activeLeague.id} league={activeLeague} currentUser={currentUser} onRolloverLeague={handleLeagueRollover} />
+                    <Dashboard 
+                        key={activeLeague.id} 
+                        league={activeLeague} 
+                        currentUser={currentUser} 
+                        onRolloverLeague={handleLeagueRollover} 
+                        onUpdateLeague={handleUpdateLeague}
+                        onDeleteLeague={handleDeleteLeague}
+                    />
                 ) : (
                     <CreateLeague
                         onCreateLeague={handleCreateLeague}

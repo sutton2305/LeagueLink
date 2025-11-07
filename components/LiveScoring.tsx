@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Player, Team, Match, League, MatchTeam, ScheduledMatch, LiveGameState, PlayerStats, PitSetup, PitEnd, PersistedMatchState } from '../types';
 import SwordsIcon from './icons/SwordsIcon';
@@ -5,6 +6,7 @@ import { sendNotification } from '../utils/notifications';
 import HorseshoeIcon from './icons/HorseshoeIcon';
 import { simulateMatch } from '../services/geminiService';
 import MagicWandIcon from './icons/MagicWandIcon';
+import { db } from '../services/database';
 
 type MatchToStart = ({ teamAId: string, teamBId: string } | { playerAId: string, playerBId: string }) & { description?: string };
 
@@ -93,7 +95,6 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
   const [endScoreB, setEndScoreB] = useState<EndResult>({ ringers: 0, points: 0 });
 
   const { winScore, playersPerTeam, pointsPerRinger } = league;
-  const liveMatchStorageKey = `live_match_state_${league.id}`;
 
   const validTeams = useMemo(() => {
     return teams.filter(team => {
@@ -102,39 +103,30 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
     });
   }, [teams, players, playersPerTeam]);
 
-  // Effect to resume a match from localStorage on component mount
   useEffect(() => {
-    // If we're being told to start a specific new match, ignore and clear any persisted state.
     if (matchToStart) {
-        localStorage.removeItem(liveMatchStorageKey);
+        db.saveLiveMatchState(league.id, null);
         return;
     }
 
-    const storedStateJSON = localStorage.getItem(liveMatchStorageKey);
-    if (storedStateJSON) {
-        try {
-            const storedState: PersistedMatchState & { description?: string } = JSON.parse(storedStateJSON);
-            setTeamA(storedState.teamA);
-            setTeamB(storedState.teamB);
-            setIsPlayerMatch(storedState.isPlayerMatch);
-            setLiveGameState(storedState.liveGameState);
-            setPitSetup(storedState.pitSetup);
-            setGameStateHistory(storedState.gameStateHistory);
-            setGameState(storedState.componentState);
-            setMatchDescription(storedState.description);
-            
-            if (storedState.componentState === 'finished') {
-                if (storedState.liveGameState.scoreA >= league.winScore) setWinner('A');
-                else if (storedState.liveGameState.scoreB >= league.winScore) setWinner('B');
-            }
-        } catch (e) {
-            console.error("Failed to parse persisted match state, resetting.", e);
-            localStorage.removeItem(liveMatchStorageKey);
+    const storedState = db.getLiveMatchState(league.id);
+    if (storedState) {
+        setTeamA(storedState.teamA);
+        setTeamB(storedState.teamB);
+        setIsPlayerMatch(storedState.isPlayerMatch);
+        setLiveGameState(storedState.liveGameState);
+        setPitSetup(storedState.pitSetup);
+        setGameStateHistory(storedState.gameStateHistory);
+        setGameState(storedState.componentState);
+        setMatchDescription((storedState as any).description);
+        
+        if (storedState.componentState === 'finished') {
+            if (storedState.liveGameState.scoreA >= league.winScore) setWinner('A');
+            else if (storedState.liveGameState.scoreB >= league.winScore) setWinner('B');
         }
     }
-  }, [liveMatchStorageKey]); // Re-run if league changes, though it only runs on mount
+  }, [league.id]);
 
-  // Effect to save the entire match state to localStorage whenever it changes
   useEffect(() => {
     if (gameState === 'playing' || gameState === 'finished' || gameState === 'pit-setup') {
         if (teamA && teamB && liveGameState && pitSetup) {
@@ -148,10 +140,10 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
                 componentState: gameState,
                 description: matchDescription,
             };
-            localStorage.setItem(liveMatchStorageKey, JSON.stringify(stateToPersist));
+            db.saveLiveMatchState(league.id, stateToPersist);
         }
     }
-  }, [gameState, teamA, teamB, liveGameState, pitSetup, gameStateHistory, isPlayerMatch, liveMatchStorageKey, matchDescription]);
+  }, [gameState, teamA, teamB, liveGameState, pitSetup, gameStateHistory, isPlayerMatch, league.id, matchDescription]);
 
 
   const startMatch = (rosterA: Player[], rosterB: Player[]) => {
@@ -208,7 +200,7 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
             const teamA = teams.find(t => t.id === matchToStart.teamAId);
             const teamB = teams.find(t => t.id === matchToStart.teamBId);
             if (teamA && teamB) {
-                resetGame(false); // Clear any previous game state before starting a new one
+                resetGame(false); 
                 setSelectedTeams([teamA, teamB]);
                 setGameState('roster-selection');
                 onMatchStarted();
@@ -217,7 +209,7 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
             const playerA = players.find(p => p.id === matchToStart.playerAId);
             const playerB = players.find(p => p.id === matchToStart.playerBId);
             if (playerA && playerB) {
-                resetGame(false); // Clear any previous game state
+                resetGame(false);
                 startMatchWithPlayers(playerA, playerB);
                 onMatchStarted();
             }
@@ -271,7 +263,7 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
 
   const resetGame = (fullReset = true) => {
     if (fullReset) {
-      localStorage.removeItem(liveMatchStorageKey);
+      db.saveLiveMatchState(league.id, null);
     }
     setSelectedTeams([]);
     setTeamA(null);
@@ -770,7 +762,6 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
                 
                 {isMultiPlayerMode && isPitSetupComplete && (
                     <div className="space-y-8">
-                        {/* END 1 */}
                         <div className={`p-4 rounded-lg border-2 transition-all duration-300 ${activeEnd === 'end1' ? 'border-brand-primary' : 'border-gray-700'}`}>
                             <h3 className="font-bold text-lg text-brand-text mb-3 text-center">End 1 {activeEnd === 'end1' && <span className="text-xs font-semibold text-brand-primary tracking-wider uppercase"> (Active)</span>}</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
@@ -784,7 +775,6 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
                                 </div>
                             </div>
                         </div>
-                        {/* END 2 */}
                         <div className={`p-4 rounded-lg border-2 transition-all duration-300 ${activeEnd === 'end2' ? 'border-brand-primary' : 'border-gray-700'}`}>
                             <h3 className="font-bold text-lg text-brand-text mb-3 text-center">End 2 {activeEnd === 'end2' && <span className="text-xs font-semibold text-brand-primary tracking-wider uppercase"> (Active)</span>}</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
@@ -814,8 +804,6 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ players, teams, addMatch, lea
     );
   }
 
-  // FIX: This block had a redundant check for 'pit-setup' which is handled by a prior block, causing a type error.
-  // The check and the ternary for 'pit-setup' were removed, simplifying the logic.
   if (gameState === 'playing' || gameState === 'finished') {
     return (
         <div className="max-w-4xl mx-auto">

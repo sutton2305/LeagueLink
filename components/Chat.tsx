@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { League, User, ChatMessage, UserPresence } from '../types';
 import { sendNotification } from '../utils/notifications';
 import DoubleCheckIcon from './icons/DoubleCheckIcon';
+import { db } from '../services/database';
 
 interface ChatProps {
     league: League;
@@ -34,7 +35,7 @@ const Chat: React.FC<ChatProps> = ({ league, currentUser, messages, setMessages 
     const presenceKey = `user_presence_${league.id}`;
 
     const updatePresence = () => {
-        const presenceData: UserPresence = JSON.parse(localStorage.getItem(presenceKey) || '{}');
+        const presenceData = db.getPresence(league.id);
         const now = Date.now();
         const activeUsers = Object.entries(presenceData)
             .filter(([, data]) => now - data.lastSeen < 60000) // Online if seen in last 60 seconds
@@ -43,18 +44,17 @@ const Chat: React.FC<ChatProps> = ({ league, currentUser, messages, setMessages 
     };
 
     useEffect(() => {
-        // Set up intervals to manage user presence
         const updateSelfInterval = setInterval(() => {
-            const presenceData: UserPresence = JSON.parse(localStorage.getItem(presenceKey) || '{}');
+            const presenceData = db.getPresence(league.id);
             presenceData[currentUser.id] = {
                 lastSeen: Date.now(),
                 userName: currentUser.email.split('@')[0],
             };
-            localStorage.setItem(presenceKey, JSON.stringify(presenceData));
-        }, 15000); // Update self every 15s
+            db.savePresence(league.id, presenceData);
+        }, 15000); 
 
-        const checkOthersInterval = setInterval(updatePresence, 20000); // Check others every 20s
-        updatePresence(); // Initial check
+        const checkOthersInterval = setInterval(updatePresence, 20000);
+        updatePresence();
 
         const handleStorageChange = (event: StorageEvent) => {
             if (event.key === presenceKey) {
@@ -68,7 +68,7 @@ const Chat: React.FC<ChatProps> = ({ league, currentUser, messages, setMessages 
             clearInterval(checkOthersInterval);
             window.removeEventListener('storage', handleStorageChange);
         };
-    }, [presenceKey, currentUser.id, currentUser.email]);
+    }, [league.id, currentUser.id, currentUser.email]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
