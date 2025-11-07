@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import useLocalStorage from './hooks/useLocalStorage';
 import { User, League, Player, Team } from './types';
@@ -38,7 +39,9 @@ const App: React.FC = () => {
     };
 
     const handleJoinLeague = (leagueId: string): boolean => {
-        const leagueToJoin = leagues.find(l => l.id === leagueId.trim());
+        // Clean the input ID to remove surrounding quotes that might be added on copy-paste.
+        const cleanedLeagueId = leagueId.trim().replace(/^"|"$|^'|'$/g, '');
+        const leagueToJoin = leagues.find(l => l.id === cleanedLeagueId);
 
         if (!leagueToJoin) {
             alert("No league found with that ID.");
